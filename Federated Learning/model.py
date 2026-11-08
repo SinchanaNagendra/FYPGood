@@ -4,81 +4,81 @@ import hashlib
 from collections.abc import Sequence
 
 import numpy as np
-import pandas as pd
 
 
-TARGET_COLUMN = "CPU usage [%]"
-CPU_SCALE = 100.0
+FEATURE_COUNT = 128
 
 
-def load_cpu_series(frame: pd.DataFrame) -> np.ndarray:
-    if TARGET_COLUMN not in frame.columns:
-        raise ValueError(f"Dataset is missing required column: {TARGET_COLUMN}")
-
-    values = pd.to_numeric(frame[TARGET_COLUMN], errors="coerce").to_numpy(dtype=np.float64)
-    if not np.isfinite(values).all():
-        raise ValueError(f"{TARGET_COLUMN} contains missing or non-finite values")
-    return values / CPU_SCALE
-
-
-def create_windows(series: np.ndarray, window_size: int) -> tuple[np.ndarray, np.ndarray]:
-    if window_size < 1:
-        raise ValueError("window_size must be positive")
-    if len(series) <= window_size:
-        raise ValueError(
-            f"Need more than {window_size} CPU samples to create a training window"
-        )
-    windows = np.lib.stride_tricks.sliding_window_view(series, window_size + 1)
-    return windows[:, :-1].copy(), windows[:, -1].copy()
-
-
-def initial_parameters(window_size: int) -> list[np.ndarray]:
+def initial_parameters(feature_count: int = FEATURE_COUNT) -> list[np.ndarray]:
     return [
-        np.zeros(window_size, dtype=np.float64),
+        np.zeros(feature_count, dtype=np.float64),
         np.zeros(1, dtype=np.float64),
     ]
 
 
-def set_parameters(parameters: Sequence[np.ndarray], window_size: int) -> tuple[np.ndarray, float]:
+def set_parameters(
+    parameters: Sequence[np.ndarray],
+    feature_count: int = FEATURE_COUNT,
+) -> tuple[np.ndarray, float]:
     if len(parameters) != 2:
-        raise ValueError("A model must contain the lag coefficient vector and intercept")
+        raise ValueError("A model must contain the feature weights and intercept")
     coefficients = np.asarray(parameters[0], dtype=np.float64)
     intercept_array = np.asarray(parameters[1], dtype=np.float64)
-    if coefficients.shape != (window_size,) or intercept_array.shape != (1,):
-        raise ValueError("Model parameter dimensions do not match the configured window size")
+    if coefficients.shape != (feature_count,) or intercept_array.shape != (1,):
+        raise ValueError("Model parameter dimensions do not match the feature count")
     if not np.isfinite(coefficients).all() or not np.isfinite(intercept_array).all():
         raise ValueError("Model parameters contain non-finite values")
     return coefficients.copy(), float(intercept_array[0])
 
 
-def predict_values(features: np.ndarray, parameters: Sequence[np.ndarray]) -> np.ndarray:
+def predict_logits(features: np.ndarray, parameters: Sequence[np.ndarray]) -> np.ndarray:
     coefficients, intercept = set_parameters(parameters, features.shape[1])
     return features @ coefficients + intercept
 
 
-def calculate_metrics(
-    targets: np.ndarray,
-    predictions: np.ndarray,
-) -> dict[str, float]:
+def calculate_metrics(targets: np.ndarray, logits: np.ndarray) -> dict[str, float]:
     targets = np.asarray(targets, dtype=np.float64)
-    predictions = np.asarray(predictions, dtype=np.float64)
-    if targets.shape != predictions.shape or targets.ndim != 1 or not targets.size:
-        raise ValueError("Targets and predictions must be non-empty one-dimensional arrays")
-    if not np.isfinite(targets).all() or not np.isfinite(predictions).all():
-        raise ValueError("Targets and predictions must contain only finite values")
+    logits = np.asarray(logits, dtype=np.float64)
+    if targets.shape != logits.shape or targets.ndim != 1 or not targets.size:
+        raise ValueError("Targets and logits must be non-empty one-dimensional arrays")
+    if (
+        not np.isfinite(targets).all()
+        or not np.isin(targets, [0.0, 1.0]).all()
+        or not np.isfinite(logits).all()
+    ):
+        raise ValueError("Targets must be binary and logits must be finite")
 
-    residuals = targets - predictions
-    squared_error = float(np.dot(residuals, residuals))
-    total_variance = float(np.sum((targets - targets.mean()) ** 2))
+    probabilities = 1.0 / (1.0 + np.exp(-np.clip(logits, -35.0, 35.0)))
+    predictions = probabilities >= 0.5
+    positive_targets = targets == 1.0
+    true_positives = int(np.sum(predictions & positive_targets))
+    false_positives = int(np.sum(predictions & ~positive_targets))
+    false_negatives = int(np.sum(~predictions & positive_targets))
+    correct = int(np.sum(predictions == positive_targets))
+    precision = (
+        true_positives / (true_positives + false_positives)
+        if true_positives + false_positives
+        else 0.0
+    )
+    recall = (
+        true_positives / (true_positives + false_negatives)
+        if true_positives + false_negatives
+        else 0.0
+    )
+    loss_sum = float(np.sum(np.logaddexp(0.0, logits) - targets * logits))
     return {
-        "mse": squared_error / len(targets),
-        "rmse": float(np.sqrt(squared_error / len(targets))),
-        "mae": float(np.mean(np.abs(residuals))),
-        "r2": 1.0 - squared_error / total_variance if total_variance else 0.0,
-        "sse": squared_error,
-        "sae": float(np.sum(np.abs(residuals))),
-        "sum_y": float(targets.sum()),
-        "sum_y_sq": float(np.dot(targets, targets)),
+        "loss": loss_sum / len(targets),
+        "loss_sum": loss_sum,
+        "accuracy": correct / len(targets),
+        "precision": precision,
+        "recall": recall,
+        "f1": 2.0 * precision * recall / (precision + recall)
+        if precision + recall
+        else 0.0,
+        "correct": float(correct),
+        "true_positives": float(true_positives),
+        "false_positives": float(false_positives),
+        "false_negatives": float(false_negatives),
     }
 
 

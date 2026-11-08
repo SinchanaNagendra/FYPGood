@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 data/*.csv
 data/clients/*.csv
+data/clients/*.npy
 results/*
 !results/.gitkeep
 Blockchain/build/

@@ -14,7 +14,7 @@ def start_clients() -> None:
     for client_id in range(1, NUM_CLIENTS + 1):
         environment = os.environ.copy()
         environment["CLIENT_ID"] = str(client_id)
-        print(f"Starting CPU worker client {client_id}")
+        print(f"Starting fraud-detection client {client_id}")
         processes.append(
             subprocess.Popen(
                 [sys.executable, str(script)],
