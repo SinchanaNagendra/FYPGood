@@ -81,8 +81,14 @@ def aggregate_fit_metrics(
 
 
 class AuditedFedAvg(fl.server.strategy.FedAvg):
-    def __init__(self, recorder: Any | None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        recorder: Any | None,
+        blockchain_round_offset: int = 0,
+        **kwargs: Any,
+    ) -> None:
         self.recorder = recorder
+        self.blockchain_round_offset = blockchain_round_offset
         self.round_history: list[dict[str, Any]] = []
         super().__init__(**kwargs)
 
@@ -115,26 +121,28 @@ class AuditedFedAvg(fl.server.strategy.FedAvg):
         )
 
         if self.recorder is not None:
+            blockchain_round = server_round + self.blockchain_round_offset
             try:
                 from Blockchain.blockchain_utils import queue_pending_record
 
-                transaction_hash = self.recorder.record_model(server_round, model_hash)
+                transaction_hash = self.recorder.record_model(blockchain_round, model_hash)
                 LOGGER.info(
-                    "Round %s recorded on-chain; transaction %s",
+                    "Training round %s recorded as on-chain round %s; transaction %s",
                     server_round,
+                    blockchain_round,
                     transaction_hash,
                 )
             except Exception:
                 LOGGER.exception(
-                    "Blockchain recording failed for round %s; preserving a retry record",
-                    server_round,
+                    "Blockchain recording failed for on-chain round %s; preserving a retry record",
+                    blockchain_round,
                 )
                 try:
-                    queue_pending_record(server_round, model_hash)
+                    queue_pending_record(blockchain_round, model_hash)
                 except OSError:
                     LOGGER.exception(
                         "Could not persist the pending blockchain record for round %s",
-                        server_round,
+                        blockchain_round,
                     )
         return parameters, metrics
 
@@ -170,13 +178,20 @@ def main() -> None:
         from Blockchain.blockchain_utils import BlockchainRecorder
 
         recorder = BlockchainRecorder.from_environment()
+        blockchain_round_offset = recorder.latest_round()
+        LOGGER.info(
+            "Connected to blockchain; registry latest round is %s",
+            blockchain_round_offset,
+        )
     else:
         recorder = None
+        blockchain_round_offset = 0
     if recorder is None:
         LOGGER.info("Blockchain recording disabled; set BLOCKCHAIN_ENABLED=true to enable it")
 
     strategy = AuditedFedAvg(
         recorder=recorder,
+        blockchain_round_offset=blockchain_round_offset,
         fraction_fit=1.0,
         fraction_evaluate=1.0,
         min_fit_clients=NUM_CLIENTS,

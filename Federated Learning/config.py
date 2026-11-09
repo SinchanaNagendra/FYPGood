@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data" / "clients"
 RESULTS_DIR = PROJECT_ROOT / "results"
+load_dotenv(PROJECT_ROOT / ".env")
 
 NUM_CLIENTS = 3
 FEATURE_COUNT = 128
@@ -19,4 +21,3 @@ _blockchain_setting = os.environ.get("BLOCKCHAIN_ENABLED", "false").strip().lowe
 if _blockchain_setting not in {"true", "false"}:
     raise ValueError("BLOCKCHAIN_ENABLED must be either 'true' or 'false'")
 BLOCKCHAIN_ENABLED = _blockchain_setting == "true"
-
